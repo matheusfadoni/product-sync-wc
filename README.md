@@ -1,4 +1,4 @@
-# Product Sync Master
+# Product Sync WC
 Este plugin para wordpress está em desenvolvimento<br>
 atualmente suas funcionalidades são:<br>
 Desde que hajam produtos com o mesmo SKU, ao salvar um produto este plugin irá sincronizar as imagens automaticamente conforme você edita produtos no site principal.<br>

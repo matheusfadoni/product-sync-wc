@@ -1,7 +1,7 @@
 <?php
 /*
-Plugin Name: Product Sync Master
-Description: Plugin para sincronizar fotos de produtos entre sites WooCommerce baseado no SKU. Versão inicial, simples e estável.
+Plugin Name: Product Sync WC
+Description: Plugin para sincronizar informações de produtos entre sites WooCommerce baseado no SKU.
 Version: 0.4.2
 Author: Matheus 
 */
@@ -29,10 +29,10 @@ add_action('admin_menu', 'add_admin_menu');
 
 function add_admin_menu() {
     add_menu_page(
-        'Configurações do Product Sync Master',
-        'Product Sync Master',
+        'Configurações do Product Sync WC',
+        'Product Sync WC',
         'manage_options',
-        'product_sync_master',
+        'product_sync_wc',
         'settings_page',
         'dashicons-update'
     );
@@ -41,11 +41,11 @@ function add_admin_menu() {
 function settings_page() {
     ?>
     <div class="wrap">
-        <h1>Configurações do Product Sync Master</h1>
+        <h1>Configurações do Product Sync WC</h1>
         <form method="post" action="options.php">
             <?php
                 settings_fields('psm_options_group');
-                do_settings_sections('product_sync_master');
+                do_settings_sections('product_sync_wc');
                 submit_button();
             ?>
         </form>
@@ -88,9 +88,11 @@ function settings_init() {
     register_setting('psm_options_group', 'psm_password', 'sanitize_text_field');
     register_setting('psm_options_group', 'psm_url', 'esc_url_raw');
 
-    add_settings_section('psm_section', 'Credenciais do Site Remoto', null, 'product_sync_master');
+    add_settings_section('psm_section', 'Credenciais do Site Remoto', null, 'product_sync_wc');
 
-    add_settings_field('psm_username', 'Nome de Usuário', 'username_render', 'product_sync_master', 'psm_section');
-    add_settings_field('psm_password', 'Chave da API', 'password_render', 'product_sync_master', 'psm_section');
-    add_settings_field('psm_url', 'URL do Site Remoto', 'url_render', 'product_sync_master', 'psm_section');
+    add_settings_field('psm_username', 'Nome de Usuário', 'username_render', 'product_sync_wc', 'psm_section');
+    add_settings_field('psm_password', 'Chave da API', 'password_render', 'product_sync_wc', 'psm_section');
+    add_settings_field('psm_url', 'URL do Site Remoto', 'url_render', 'product_sync_wc', 'psm_section');
 }
+
+
