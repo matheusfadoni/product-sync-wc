@@ -80,3 +80,5 @@
 [2025-01-28 13:05:40] [REQUISIÇÃO] Produto encontrado. ID: 15. Tentando adicionar imagem...
 [2025-01-28 13:05:42] [DEBUG] Corpo da requisição para SKU 987654321: {"images":[{"src":"https:\/\/darkgoldenrod-stinkbug-118617.hostingersite.com\/wp-content\/uploads\/2024\/11\/cropped-cropped-mapy.png"}]}
 [2025-01-28 13:05:42] [REQUISIÇÃO] Imagem adicionada com sucesso ao SKU 987654321 no outro site.
+[2026-01-30 14:27:43] [LOCAL] Produto com SKU 1278 não possui imagem destacada. Encerrando execução.
+[2026-01-30 20:10:08] [LOCAL] Produto com SKU 315549 não possui imagem destacada. Encerrando execução.

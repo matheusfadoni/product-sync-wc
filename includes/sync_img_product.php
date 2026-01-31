@@ -1,11 +1,49 @@
 <?php
 
 $image_name_before_removal = '';
-$username = get_option('psm_username');
-$password = get_option('psm_password');
-$url = get_option('psm_url');
 
-// NEW FUNCTIONS
+function psm_get_remote_credentials() {
+    return [
+        'username' => get_option('psm_username'),
+        'password' => get_option('psm_password'),
+        'url' => get_option('psm_url'),
+    ];
+}
+
+function psm_get_local_image_stats($attachment_id) {
+    $file_path = get_attached_file($attachment_id);
+    if (!$file_path || !file_exists($file_path)) return null;
+
+    $size = @filesize($file_path);
+    $mtime = @filemtime($file_path);
+
+    if ($size === false || $mtime === false) return null;
+
+    return [
+        'attachment_id' => (int) $attachment_id,
+        'size' => (int) $size,
+        'mtime' => (int) $mtime,
+    ];
+}
+
+function psm_head_remote_image_stats($remote_image_url) {
+    if (empty($remote_image_url) || !filter_var($remote_image_url, FILTER_VALIDATE_URL)) return null;
+
+    $response = wp_remote_head($remote_image_url, ['timeout' => 10]);
+    if (is_wp_error($response)) return null;
+
+    $content_length = wp_remote_retrieve_header($response, 'content-length');
+    $last_modified = wp_remote_retrieve_header($response, 'last-modified');
+
+    $content_length = is_array($content_length) ? end($content_length) : $content_length;
+    $last_modified = is_array($last_modified) ? end($last_modified) : $last_modified;
+
+    return [
+        'content_length' => is_numeric($content_length) ? (int) $content_length : null,
+        'last_modified' => is_string($last_modified) && $last_modified !== '' ? $last_modified : null,
+    ];
+}
+
 function check_and_create_sync_table() { // Checar e criar tabela de sincronização de imagens
     global $wpdb;
     $table_name = $wpdb->prefix . 'psm_product_image_sync';
@@ -101,6 +139,35 @@ function sync_on_product_save($post_id, $post, $update) {
         return;
     }
 
+    // Se nada mudou localmente e a imagem remota parece igual, evita chamadas desnecessarias.
+    $local_stats = psm_get_local_image_stats($thumbnail_id);
+    $last_synced_attachment_id = (int) get_post_meta($post_id, '_psm_last_synced_attachment_id', true);
+    $last_synced_size = (int) get_post_meta($post_id, '_psm_last_synced_filesize', true);
+    $last_synced_mtime = (int) get_post_meta($post_id, '_psm_last_synced_filemtime', true);
+    $remote_image_src = get_post_meta($post_id, '_psm_remote_image_src', true);
+
+    if ($local_stats
+        && $last_synced_attachment_id === (int) $thumbnail_id
+        && $last_synced_size === (int) $local_stats['size']
+        && $last_synced_mtime === (int) $local_stats['mtime']
+        && !empty($remote_image_src)
+    ) {
+        $remote_stats = psm_head_remote_image_stats($remote_image_src);
+        $remote_last_length = get_post_meta($post_id, '_psm_remote_image_content_length', true);
+        $remote_last_modified = get_post_meta($post_id, '_psm_remote_image_last_modified', true);
+
+        if ($remote_stats
+            && $remote_stats['content_length'] !== null
+            && (string) $remote_last_length !== ''
+            && (int) $remote_last_length === (int) $remote_stats['content_length']
+            && !empty($remote_last_modified)
+            && (string) $remote_last_modified === (string) $remote_stats['last_modified']
+        ) {
+            log_img_product("[LOCAL] SKU $sku: imagem local inalterada e remota equivalente (content-length/last-modified). Pulando sync.");
+            return;
+        }
+    }
+
     $image_url = wp_get_attachment_url($thumbnail_id);
     if (!$image_url) {
         log_img_product("[ERRO] Não foi possível obter a URL da imagem para o SKU $sku.");
@@ -113,15 +180,18 @@ function sync_on_product_save($post_id, $post, $update) {
     }
 
     try {
-        sync_update_product_photo($sku, $image_url);
+        sync_update_product_photo($post_id, $sku, $image_url, $thumbnail_id);
     } catch (Exception $e) {
         log_img_product("[ERRO] Erro inesperado ao sincronizar imagem para SKU $sku: " . $e->getMessage());
     }
 }
 
 // Função de sincronização de imagem (envia ao outro site)
-function sync_update_product_photo($sku, $image_url) {
-    global $username, $password, $url;
+function sync_update_product_photo($post_id, $sku, $image_url, $thumbnail_id) {
+    $creds = psm_get_remote_credentials();
+    $username = $creds['username'];
+    $password = $creds['password'];
+    $url = $creds['url'];
 
     log_img_product("[REQUISIÇÃO] Sincronização iniciada para SKU: $sku. URL da imagem: $image_url");
 
@@ -199,6 +269,36 @@ function sync_update_product_photo($sku, $image_url) {
             return;
         }
 
+        $updated_body = json_decode($update_response_body, true);
+        if (is_array($updated_body) && !empty($updated_body['images'][0])) {
+            $remote_image_id = isset($updated_body['images'][0]['id']) ? (int) $updated_body['images'][0]['id'] : 0;
+            $remote_image_src = isset($updated_body['images'][0]['src']) ? (string) $updated_body['images'][0]['src'] : '';
+
+            if ($remote_image_id > 0) {
+                update_post_meta($post_id, '_psm_remote_image_id', $remote_image_id);
+            }
+            if ($remote_image_src !== '') {
+                update_post_meta($post_id, '_psm_remote_image_src', $remote_image_src);
+
+                $remote_stats = psm_head_remote_image_stats($remote_image_src);
+                if ($remote_stats) {
+                    if ($remote_stats['content_length'] !== null) {
+                        update_post_meta($post_id, '_psm_remote_image_content_length', (int) $remote_stats['content_length']);
+                    }
+                    if (!empty($remote_stats['last_modified'])) {
+                        update_post_meta($post_id, '_psm_remote_image_last_modified', (string) $remote_stats['last_modified']);
+                    }
+                }
+            }
+        }
+
+        $local_stats = psm_get_local_image_stats($thumbnail_id);
+        if ($local_stats) {
+            update_post_meta($post_id, '_psm_last_synced_attachment_id', (int) $thumbnail_id);
+            update_post_meta($post_id, '_psm_last_synced_filesize', (int) $local_stats['size']);
+            update_post_meta($post_id, '_psm_last_synced_filemtime', (int) $local_stats['mtime']);
+        }
+
         log_img_product("[REQUISIÇÃO] Imagem adicionada com sucesso ao SKU $sku no outro site.");
     } catch (Exception $e) {
         log_img_product("[ERRO] Erro inesperado ao sincronizar imagem para SKU $sku: " . $e->getMessage());
@@ -214,19 +314,86 @@ function check_and_remove_image_on_update($post_id, $post, $update) {
             global $image_name_before_removal;
             $sku = get_post_meta($post_id, '_sku', true);
 
-            if ($image_name_before_removal) {
-                sync_remove_image_by_name($image_name_before_removal);
-                log_img_product("[LOCAL] [REQUISIÇÃO] Imagem destacada removida para SKU: $sku. Nome: $image_name_before_removal");
-                $image_name_before_removal = '';
+            $remote_image_id = (int) get_post_meta($post_id, '_psm_remote_image_id', true);
+            $remote_image_src = (string) get_post_meta($post_id, '_psm_remote_image_src', true);
+
+            // Preferir deletar pelo ID remoto salvo (mais preciso que "por nome").
+            if ($remote_image_id > 0) {
+                $deleted = sync_remove_remote_media_by_id($remote_image_id);
+                if ($deleted) {
+                    log_img_product("[LOCAL] [REQUISIÇÃO] SKU $sku: imagem removida no remoto via ID $remote_image_id.");
+                    delete_post_meta($post_id, '_psm_remote_image_id');
+                    delete_post_meta($post_id, '_psm_remote_image_src');
+                    delete_post_meta($post_id, '_psm_remote_image_content_length');
+                    delete_post_meta($post_id, '_psm_remote_image_last_modified');
+                } else {
+                    log_img_product("[ERRO] SKU $sku: falha ao remover imagem remota via ID $remote_image_id. Tentando fallback por nome.");
+                }
             }
+
+            if ($remote_image_id <= 0) {
+                $fallback_name = '';
+                if (!empty($remote_image_src)) {
+                    $fallback_name = basename($remote_image_src);
+                } elseif ($image_name_before_removal) {
+                    $fallback_name = $image_name_before_removal;
+                }
+
+                if ($fallback_name) {
+                    sync_remove_image_by_name($fallback_name);
+                    log_img_product("[LOCAL] [REQUISIÇÃO] Imagem destacada removida para SKU: $sku. Fallback nome: $fallback_name");
+                }
+            }
+
+            $image_name_before_removal = '';
         }
     } catch (Exception $e) {
         log_img_product("[ERRO] Erro inesperado ao verificar/remover imagem para SKU $sku: " . $e->getMessage());
     }
 }
 
+function sync_remove_remote_media_by_id($media_id) {
+    $creds = psm_get_remote_credentials();
+    $username = $creds['username'];
+    $password = $creds['password'];
+    $url = $creds['url'];
+
+    if (empty($url) || !filter_var($url, FILTER_VALIDATE_URL)) {
+        log_img_product("[ERRO] URL base invalida ao tentar remover media por ID: " . ($url ?: 'NULO'));
+        return false;
+    }
+
+    $delete_url = rtrim($url, '/') . "/wp-json/wp/v2/media/" . (int) $media_id;
+
+    $delete_response = wp_remote_request($delete_url, [
+        'method' => 'DELETE',
+        'headers' => [
+            'Authorization' => 'Basic ' . base64_encode($username . ':' . $password),
+        ],
+        'body' => ['force' => true],
+        'timeout' => 20,
+    ]);
+
+    if (is_wp_error($delete_response)) {
+        log_img_product("[ERRO] Erro ao remover media ID $media_id: " . $delete_response->get_error_message());
+        return false;
+    }
+
+    $code = wp_remote_retrieve_response_code($delete_response);
+    if ($code !== 200) {
+        $body = wp_remote_retrieve_body($delete_response);
+        log_img_product("[ERRO] Remocao media ID $media_id retornou HTTP $code. Resposta: $body");
+        return false;
+    }
+
+    return true;
+}
+
 function sync_remove_image_by_name($image_name) {
-    global $username, $password, $url;
+    $creds = psm_get_remote_credentials();
+    $username = $creds['username'];
+    $password = $creds['password'];
+    $url = $creds['url'];
 
     log_img_product("[REQUISIÇÃO] Iniciando remoção de imagem com nome: $image_name");
 
